@@ -57,12 +57,18 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
 
+#[cfg(target_os = "macos")]
+const UNIFIED_EXEC_DEFAULT_LOCALE: &str = "en_US.UTF-8";
+
+#[cfg(not(target_os = "macos"))]
+const UNIFIED_EXEC_DEFAULT_LOCALE: &str = "C.UTF-8";
+
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
     ("TERM", "dumb"),
-    ("LANG", "C.UTF-8"),
-    ("LC_CTYPE", "C.UTF-8"),
-    ("LC_ALL", "C.UTF-8"),
+    ("LANG", UNIFIED_EXEC_DEFAULT_LOCALE),
+    ("LC_CTYPE", UNIFIED_EXEC_DEFAULT_LOCALE),
+    ("LC_ALL", UNIFIED_EXEC_DEFAULT_LOCALE),
     ("COLORTERM", ""),
     ("PAGER", "cat"),
     ("GIT_PAGER", "cat"),
@@ -88,9 +94,15 @@ fn should_use_deterministic_process_ids() -> bool {
     cfg!(test) || deterministic_process_ids_forced_for_tests()
 }
 
-fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
+fn apply_unified_exec_env(
+    mut env: HashMap<String, String>,
+    explicit_env_overrides: &HashMap<String, String>,
+) -> HashMap<String, String> {
     for (key, value) in UNIFIED_EXEC_ENV {
         env.insert(key.to_string(), value.to_string());
+    }
+    for (key, value) in explicit_env_overrides {
+        env.insert(key.clone(), value.clone());
     }
     env
 }
@@ -722,7 +734,8 @@ impl UnifiedExecProcessManager {
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             context.session.conversation_id.to_string(),
         );
-        let env = apply_unified_exec_env(env);
+        let explicit_env_overrides = context.turn.shell_environment_policy.r#set.clone();
+        let env = apply_unified_exec_env(env, &explicit_env_overrides);
         let exec_server_env_config = ExecServerEnvConfig {
             policy: exec_env_policy_from_shell_policy(&context.turn.shell_environment_policy),
             local_policy_env,
@@ -756,7 +769,7 @@ impl UnifiedExecProcessManager {
             cwd,
             env,
             exec_server_env_config: Some(exec_server_env_config),
-            explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            explicit_env_overrides,
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,

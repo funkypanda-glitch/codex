@@ -5,13 +5,19 @@ use tokio::time::Instant;
 
 #[test]
 fn unified_exec_env_injects_defaults() {
-    let env = apply_unified_exec_env(HashMap::new());
+    let env = apply_unified_exec_env(HashMap::new(), &HashMap::new());
     let expected = HashMap::from([
         ("NO_COLOR".to_string(), "1".to_string()),
         ("TERM".to_string(), "dumb".to_string()),
-        ("LANG".to_string(), "C.UTF-8".to_string()),
-        ("LC_CTYPE".to_string(), "C.UTF-8".to_string()),
-        ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+        ("LANG".to_string(), UNIFIED_EXEC_DEFAULT_LOCALE.to_string()),
+        (
+            "LC_CTYPE".to_string(),
+            UNIFIED_EXEC_DEFAULT_LOCALE.to_string(),
+        ),
+        (
+            "LC_ALL".to_string(),
+            UNIFIED_EXEC_DEFAULT_LOCALE.to_string(),
+        ),
         ("COLORTERM".to_string(), String::new()),
         ("PAGER".to_string(), "cat".to_string()),
         ("GIT_PAGER".to_string(), "cat".to_string()),
@@ -28,10 +34,51 @@ fn unified_exec_env_overrides_existing_values() {
     base.insert("NO_COLOR".to_string(), "0".to_string());
     base.insert("PATH".to_string(), "/usr/bin".to_string());
 
-    let env = apply_unified_exec_env(base);
+    let env = apply_unified_exec_env(base, &HashMap::new());
 
     assert_eq!(env.get("NO_COLOR"), Some(&"1".to_string()));
     assert_eq!(env.get("PATH"), Some(&"/usr/bin".to_string()));
+}
+
+#[test]
+fn unified_exec_env_preserves_explicit_shell_policy_values() {
+    let explicit_env_overrides = HashMap::from([
+        ("LANG".to_string(), "en_US.UTF-8".to_string()),
+        ("LC_ALL".to_string(), "en_US.UTF-8".to_string()),
+        ("NO_COLOR".to_string(), "0".to_string()),
+    ]);
+
+    let env = apply_unified_exec_env(HashMap::new(), &explicit_env_overrides);
+
+    assert_eq!(env.get("LANG"), Some(&"en_US.UTF-8".to_string()));
+    assert_eq!(env.get("LC_ALL"), Some(&"en_US.UTF-8".to_string()));
+    assert_eq!(env.get("NO_COLOR"), Some(&"0".to_string()));
+}
+
+#[test]
+fn unified_exec_env_preserves_explicit_values_filtered_out_of_policy_env() {
+    let policy = ShellEnvironmentPolicy {
+        inherit: codex_config::types::ShellEnvironmentPolicyInherit::Core,
+        ignore_default_excludes: true,
+        exclude: Vec::new(),
+        r#set: HashMap::from([
+            ("LANG".to_string(), "en_US.UTF-8".to_string()),
+            ("LC_ALL".to_string(), "en_US.UTF-8".to_string()),
+        ]),
+        include_only: vec![
+            codex_config::types::EnvironmentVariablePattern::new_case_insensitive("PATH"),
+        ],
+        use_profile: false,
+    };
+    let base_env = create_env(&policy, /*thread_id*/ None);
+
+    assert!(!base_env.contains_key("LANG"));
+    assert!(!base_env.contains_key("LC_ALL"));
+
+    let env = apply_unified_exec_env(base_env, &policy.r#set);
+
+    assert_eq!(env.get("LANG"), Some(&"en_US.UTF-8".to_string()));
+    assert_eq!(env.get("LC_ALL"), Some(&"en_US.UTF-8".to_string()));
 }
 
 #[test]

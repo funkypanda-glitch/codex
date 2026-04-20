@@ -7,6 +7,8 @@ use crate::command_safety::is_dangerous_command::find_git_subcommand;
 use crate::command_safety::is_dangerous_command::git_global_option_requires_prompt;
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 
+const SAFE_GIT_SUBCOMMANDS: &[&str] = &["status", "log", "diff", "show", "branch"];
+
 pub fn is_known_safe_command(command: &[String]) -> bool {
     let command: Vec<String> = command
         .iter()
@@ -135,15 +137,16 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
 
         // Git
         Some("git") => {
-            // Global options that redirect config, repository, or helper
-            // lookup can make otherwise read-only git commands execute
-            // attacker-controlled code, so they must never be auto-approved.
+            // Global options that launch a pager or redirect config,
+            // repository, or helper lookup can make otherwise read-only git
+            // commands execute external code, so they must never be
+            // auto-approved.
             if git_has_unsafe_global_option(command) {
                 return false;
             }
 
             let Some((subcommand_idx, subcommand)) =
-                find_git_subcommand(command, &["status", "log", "diff", "show", "branch"])
+                find_git_subcommand(command, SAFE_GIT_SUBCOMMANDS)
             else {
                 return false;
             };
@@ -210,11 +213,23 @@ fn git_branch_is_read_only(branch_args: &[String]) -> bool {
 }
 
 fn git_has_unsafe_global_option(command: &[String]) -> bool {
-    command
+    if command
         .iter()
         .skip(1)
         .map(String::as_str)
         .any(git_global_option_requires_prompt)
+    {
+        return true;
+    }
+
+    let Some((subcommand_idx, _)) = find_git_subcommand(command, SAFE_GIT_SUBCOMMANDS) else {
+        return false;
+    };
+
+    command[1..subcommand_idx]
+        .iter()
+        .map(String::as_str)
+        .any(|arg| matches!(arg, "-p" | "--paginate"))
 }
 
 fn git_subcommand_args_are_read_only(args: &[String]) -> bool {
@@ -288,6 +303,12 @@ mod tests {
         assert!(is_safe_to_call_with_exec(&vec_str(&["ls"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&["git", "status"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&["git", "branch"])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "git", "log", "-p", "-n", "1"
+        ])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "git", "-P", "status"
+        ])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "git",
             "branch",
@@ -380,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn git_global_override_flags_are_not_safe() {
+    fn git_unsafe_global_flags_are_not_safe() {
         assert!(!is_known_safe_command(&vec_str(&[
             "git",
             "-c",
@@ -396,6 +417,9 @@ mod tests {
         ])));
 
         for args in [
+            vec_str(&["git", "-p", "status"]),
+            vec_str(&["git", "-C", ".", "-p", "status"]),
+            vec_str(&["git", "--paginate", "show", "HEAD"]),
             vec_str(&["git", "--config-env", "core.pager=PAGER", "show", "HEAD"]),
             vec_str(&["git", "--config-env=core.pager=PAGER", "show", "HEAD"]),
             vec_str(&["git", "--git-dir", ".evil-git", "diff", "HEAD~1..HEAD"]),
@@ -420,6 +444,22 @@ mod tests {
             "-lc",
             "git --git-dir=.evil-git diff HEAD~1..HEAD",
         ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git -p status",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git --paginate show HEAD",
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "git",
+            "--no-pager",
+            "status"
+        ])));
+        assert!(is_known_safe_command(&vec_str(&["git", "-P", "status"])));
     }
 
     #[test]

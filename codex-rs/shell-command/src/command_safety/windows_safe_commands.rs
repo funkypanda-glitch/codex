@@ -229,7 +229,9 @@ fn is_safe_git_command(words: &[String]) -> bool {
         let arg_lc = arg.to_ascii_lowercase();
 
         if arg.starts_with('-') {
-            if git_global_option_requires_prompt(&arg_lc)
+            if arg == "-p"
+                || arg_lc == "--paginate"
+                || git_global_option_requires_prompt(&arg_lc)
                 || arg.eq_ignore_ascii_case("--config")
                 || arg_lc.starts_with("--config=")
             {
@@ -359,13 +361,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_git_global_override_options() {
+    fn rejects_git_unsafe_global_options() {
         let Some(pwsh) = try_find_pwsh_executable_blocking() else {
             return;
         };
 
         let pwsh: String = pwsh.as_path().to_str().unwrap().into();
         for script in [
+            "git -p status",
+            "git --paginate show HEAD:foo.rs",
             "git -c core.pager=cat show HEAD:foo.rs",
             "git --config-env core.pager=PAGER show HEAD:foo.rs",
             "git --config-env=core.pager=PAGER show HEAD:foo.rs",
@@ -389,6 +393,19 @@ mod tests {
                     script.to_string(),
                 ]),
                 "expected {script:?} to require approval due to unsafe git global option",
+            );
+        }
+
+        for script in ["git --no-pager status", "git -P status", "git log -p -n 1"] {
+            assert!(
+                is_safe_command_windows(&[
+                    pwsh.clone(),
+                    "-NoLogo".to_string(),
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    script.to_string(),
+                ]),
+                "expected {script:?} to remain safe",
             );
         }
     }
